@@ -4,7 +4,7 @@
 const $ = (s) => document.querySelector(s);
 
 /* ======================= Versions-Check: passen Seite und Programm zusammen? ======================= */
-const APP_VERSION = '10';
+const APP_VERSION = '11';
 (() => {
   const pageVersion = document.querySelector('meta[name="jarvis-version"]')?.content;
   const el = document.getElementById('appVersion');
@@ -121,7 +121,7 @@ const settings = {
   geminiKey: '', geminiModel: 'gemini-2.5-flash', routing: 'auto',
   googleClientId: '', googleSecret: '', googleRefresh: '',
   voice: true, voiceName: '', pitch: 0.85, rate: 1.0,
-  voiceEngine: 'gemini', geminiVoice: 'Charon', ttsModel: '', longDevice: true,
+  voiceEngine: 'piper', piperVoice: 'de_DE-thorsten-medium', geminiVoice: 'Charon', ttsModel: '', longDevice: true,
   voiceStyle: 'Sprich auf Deutsch, ruhig, tief, kultiviert und souverän – wie ein erfahrener, leicht ironischer britischer Butler. Natürliche Pausen, kein Vorlesen-Ton:',
   elevenKey: '', elevenVoice: 'JBFqnCBsd6RMkjVDRZzb',
 };
@@ -867,6 +867,54 @@ async function elevenTTS(text) {
   return r.blob();
 }
 
+/* ---------- Eigene Jarvis-Stimme: Piper "Thorsten", läuft komplett auf dem Gerät ---------- */
+let piperSession = null, piperLoading = null, piperFailed = false;
+function piperInit(onProgress) {
+  if (piperSession) return Promise.resolve(piperSession);
+  if (!piperLoading) {
+    piperLoading = (async () => {
+      const m = await import(`./piper/piper-bundle.js?v=${APP_VERSION}`);
+      const base = new URL('piper/', location.href).href;
+      const s = await m.TtsSession.create({
+        voiceId: settings.piperVoice,
+        progress: (p) => piperProgress?.(p),
+        wasmPaths: { onnxWasm: base, piperData: base + 'piper_phonemize.data', piperWasm: base + 'piper_phonemize.wasm' },
+      });
+      piperSession = s;
+      return s;
+    })().catch((e) => { piperLoading = null; throw e; });
+  }
+  piperProgress = onProgress;
+  return piperLoading;
+}
+let piperProgress = null;
+const piperStatus = (p) => {
+  if (p?.total && p.url && !String(p.url).startsWith('tts://')) setState('thinking', `Lade Jarvis-Stimme (einmalig) … ${Math.round((p.loaded / p.total) * 100)} %`);
+};
+// In Sätze bzw. Abschnitte von max. ~220 Zeichen teilen → Jarvis fängt schnell an zu sprechen
+function speechChunks(plain) {
+  const sentences = (plain.match(/[^.!?…]+[.!?…]+["“”»]?|\S[^.!?…]*$/g) || [plain]).map((x) => x.trim()).filter(Boolean);
+  const chunks = []; let cur = '';
+  for (const s of sentences) { if (cur && (cur + ' ' + s).length > 220) { chunks.push(cur); cur = s; } else cur = cur ? cur + ' ' + s : s; }
+  if (cur) chunks.push(cur);
+  return chunks;
+}
+let speakToken = 0;
+async function piperSpeak(plain) {
+  const token = speakToken;
+  const s = await piperInit(piperStatus);
+  const chunks = speechChunks(plain);
+  setState('thinking', 'Stimme wird erzeugt …');
+  let next = s.predict(chunks[0]);
+  for (let i = 0; i < chunks.length; i++) {
+    const blob = await next;
+    if (token !== speakToken) return;                         // inzwischen gestoppt
+    if (i + 1 < chunks.length) next = s.predict(chunks[i + 1]); // nächsten Satz schon erzeugen, während dieser läuft
+    await playBlob(blob);
+    if (token !== speakToken) return;
+  }
+}
+
 // Abspielen + Kern pulsiert passend zur echten Lautstärke
 let currentAudio = null, audioCtx = null;
 function playBlob(blob) {
@@ -897,30 +945,48 @@ function playBlob(blob) {
   });
 }
 function stopSpeaking() {
+  speakToken++;
   if ('speechSynthesis' in window) speechSynthesis.cancel();
   if (currentAudio) { const a = currentAudio; a.pause(); a.dispatchEvent(new Event('stopped')); }
 }
 
 let voiceWarned = false;
-// sensitive = enthält evtl. Mail-Inhalte → nie an einen Cloud-Sprachdienst schicken
+// Reihenfolge: gewählte Cloud-Stimme → eigene Jarvis-Stimme (Piper, lokal) → Gerätestimme
+// sensitive = enthält evtl. Mail-Inhalte → nie an einen Cloud-Sprachdienst, nur lokal
 async function speak(text, sensitive = false) {
-  const plain = text.replace(/[*#_`>|•]/g, '').replace(/https?:\/\/\S+/g, '').replace(/\n+/g, '. ').trim();
+  const plain = text.replace(/[*#_`>|•]/g, '').replace(/https?:\/\/\S+/g, '').replace(/\n+/g, '. ').replace(/\s+/g, ' ').trim();
+  if (!plain) return;
   stopSpeaking();
+  const token = speakToken;
   const engine = settings.voiceEngine;
+  const cloud = engine === 'gemini' || engine === 'eleven';
   const tooLong = settings.longDevice && plain.length > 900;
-  if (engine !== 'device' && !sensitive && !tooLong) {
+  if (cloud && !sensitive && !tooLong) {
     try {
       setState('thinking', 'Stimme wird erzeugt …');
       const blob = engine === 'eleven' ? await elevenTTS(plain) : await geminiTTS(plain);
+      if (token !== speakToken) return;
       await playBlob(blob);
       setState('idle');
       return;
     } catch (e) {
-      if (!voiceWarned) { voiceWarned = true; addMsg('jarvis error', `Realistische Stimme gerade nicht verfügbar (${e.message}) – ich nutze vorerst die Gerätestimme.`); }
+      if (token !== speakToken) return;
+      if (!voiceWarned) { voiceWarned = true; addMsg('jarvis error', `${engine === 'eleven' ? 'ElevenLabs' : 'Gemini'}-Stimme gerade nicht verfügbar (${e.message}) – ich nutze vorerst meine eigene Stimme.`); }
+    }
+  }
+  if (engine !== 'device' && !piperFailed) {
+    try {
+      await piperSpeak(plain);
+      if (token === speakToken) setState('idle');
+      return;
+    } catch (e) {
+      if (token !== speakToken) return;
+      piperFailed = true; // in dieser Sitzung nicht erneut versuchen
+      addMsg('jarvis error', `Meine eigene Stimme konnte nicht starten (${e.message}) – ich nutze die Gerätestimme.`);
     }
   }
   await deviceSpeak(plain);
-  setState('idle');
+  if (token === speakToken) setState('idle');
 }
 function say(text, alsoLog = true, brain, sensitive = false) {
   if (alsoLog) addMsg('jarvis', text, brain);
@@ -935,7 +1001,7 @@ function fillVoiceList() {
 if ('speechSynthesis' in window) speechSynthesis.addEventListener('voiceschanged', fillVoiceList);
 $('#sPitch').addEventListener('input', (e) => { $('#pitchVal').textContent = e.target.value; });
 $('#sRate').addEventListener('input', (e) => { $('#rateVal').textContent = e.target.value; });
-const VOICE_FIELDS = { sVoiceName: 'voiceName', sPitch: 'pitch', sRate: 'rate', sVoiceEngine: 'voiceEngine', sGeminiVoice: 'geminiVoice', sVoiceStyle: 'voiceStyle', sElevenKey: 'elevenKey', sElevenVoice: 'elevenVoice' };
+const VOICE_FIELDS = { sPiperVoice: 'piperVoice', sVoiceName: 'voiceName', sPitch: 'pitch', sRate: 'rate', sVoiceEngine: 'voiceEngine', sGeminiVoice: 'geminiVoice', sVoiceStyle: 'voiceStyle', sElevenKey: 'elevenKey', sElevenVoice: 'elevenVoice' };
 $('#btnVoiceTest').addEventListener('click', async () => {
   const keep = {};
   for (const [id, k] of Object.entries(VOICE_FIELDS)) { keep[k] = settings[k]; settings[k] = $('#' + id).value.trim(); }
@@ -948,6 +1014,16 @@ function updateVoiceFields() {
   document.querySelectorAll('[data-engine]').forEach((el) => { el.hidden = !el.dataset.engine.split(' ').includes(e); });
 }
 $('#sVoiceEngine').addEventListener('change', updateVoiceFields);
+$('#btnPiperLoad').addEventListener('click', async () => {
+  const out = $('#piperOut');
+  if (piperSession && settings.piperVoice !== $('#sPiperVoice').value) { out.textContent = 'Bitte erst speichern und Jarvis neu öffnen – dann wird die neue Stimme geladen.'; return; }
+  settings.piperVoice = $('#sPiperVoice').value;
+  out.textContent = 'Lade … (das kann je nach Verbindung 1–3 Minuten dauern)';
+  try {
+    await piperInit((p) => { if (p?.total && !String(p.url).startsWith('tts://')) out.textContent = `Lade Stimme … ${Math.round((p.loaded / p.total) * 100)} % von ${Math.round(p.total / 1048576)} MB`; });
+    out.textContent = '✓ Jarvis-Stimme ist auf dem Gerät gespeichert. Tippe auf „Probe hören“.';
+  } catch (e) { out.textContent = '✗ ' + e.message; }
+});
 
 $('#reactor').addEventListener('click', () => {
   const r = $('#reactor');
@@ -1009,7 +1085,7 @@ $('#sAccent').addEventListener('change', (e) => setAccent(e.target.value));
 $('#sDensity').addEventListener('change', (e) => { theme.density = Number(e.target.value); saveTheme(); });
 
 /* ======================= Einstellungen ======================= */
-const FIELDS = { sVoiceEngine: 'voiceEngine', sGeminiVoice: 'geminiVoice', sVoiceStyle: 'voiceStyle', sElevenKey: 'elevenKey', sElevenVoice: 'elevenVoice', sGemini: 'geminiKey', sGeminiModel: 'geminiModel', sRouting: 'routing', sAnthropic: 'anthropicKey', sFinnhub: 'finnhubKey', sModel: 'model', sGClient: 'googleClientId', sGSecret: 'googleSecret', sGRefresh: 'googleRefresh', sPitch: 'pitch', sRate: 'rate' };
+const FIELDS = { sPiperVoice: 'piperVoice', sVoiceEngine: 'voiceEngine', sGeminiVoice: 'geminiVoice', sVoiceStyle: 'voiceStyle', sElevenKey: 'elevenKey', sElevenVoice: 'elevenVoice', sGemini: 'geminiKey', sGeminiModel: 'geminiModel', sRouting: 'routing', sAnthropic: 'anthropicKey', sFinnhub: 'finnhubKey', sModel: 'model', sGClient: 'googleClientId', sGSecret: 'googleSecret', sGRefresh: 'googleRefresh', sPitch: 'pitch', sRate: 'rate' };
 $('#btnSettings').addEventListener('click', () => {
   for (const [id, k] of Object.entries(FIELDS)) $('#' + id).value = settings[k];
   $('#sWatch').value = settings.watchlist.join(', ');
@@ -1101,6 +1177,7 @@ navigator.serviceWorker?.addEventListener('message', (e) => { if (e.data === 'be
 
 /* ======================= Start (erst nach dem Entsperren) ======================= */
 function start() {
+  if (!settings.voiceV11) { settings.voiceEngine = 'piper'; settings.voiceV11 = true; saveVault(); } // neue Standard-Stimme
   orb.start(); renderChips();
   tick(); setInterval(tick, 10000);
   renderTasks(); renderWeather(); renderStocks(); renderMail();
