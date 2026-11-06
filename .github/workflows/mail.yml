@@ -1,0 +1,46 @@
+name: Jarvis E-Mail-Wächter
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'   # alle 30 Minuten (nachts 23–6 Uhr pausiert das Skript selbst)
+  workflow_dispatch:
+
+concurrency:
+  group: jarvis-mail
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  mail:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/cache/restore@v4
+        with:
+          path: server/seen.json
+          key: mail-seen-${{ github.run_id }}
+          restore-keys: mail-seen-
+      - run: npm install --no-save --no-audit --no-fund web-push@3.6.7
+      - run: node mail-check.mjs
+        env:
+          MANUELL: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          PUSH_SUBSCRIPTION: ${{ secrets.PUSH_SUBSCRIPTION }}
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: server/seen.json
+          key: mail-seen-${{ github.run_id }}
