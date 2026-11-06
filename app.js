@@ -101,6 +101,7 @@ applyTheme();
 const HOME = { name: 'Lügde (32676)', lat: 51.9577, lon: 9.2487 };
 const settings = {
   anthropicKey: '', finnhubKey: '', model: 'claude-sonnet-5-5', watchlist: ['TTWO', 'NVDA'], webSearch: true,
+  geminiKey: '', geminiModel: 'gemini-2.5-flash', routing: 'auto',
   googleClientId: '', googleSecret: '', googleRefresh: '',
   voice: true, voiceName: '', pitch: 0.85, rate: 1.0,
 };
@@ -221,7 +222,7 @@ function setState(state, text) {
 }
 function renderChips() {
   const items = [
-    ['KI', !!settings.anthropicKey], ['BÖRSE', !!settings.finnhubKey], ['GMAIL', !!gmailReady()],
+    ['GEMINI', !!settings.geminiKey], ['CLAUDE', !!settings.anthropicKey], ['BÖRSE', !!settings.finnhubKey], ['GMAIL', !!gmailReady()],
     ['PUSH', 'Notification' in window && Notification.permission === 'granted'], ['TRESOR', !!vaultKey],
   ];
   $('#chips').innerHTML = items.map(([n, on]) => `<span class="chip ${on ? 'on' : 'off'}">${n}</span>`).join('');
@@ -530,46 +531,132 @@ async function callClaude(messages, useWeb) {
   }
   return j;
 }
-function trimHistory() {
-  while (history.length > 24) {
-    history.shift();
-    while (history.length && !(history[0].role === 'user' && typeof history[0].content === 'string')) history.shift();
-  }
-}
 const label = (n) => ({
   get_weather: 'Prüfe das Wetter …', get_stock_quotes: 'Hole Kurse …', get_stock_news: 'Lese Unternehmensnews …',
   get_market_news: 'Scanne die Märkte …', search_emails: 'Sehe den Posteingang durch …', read_email: 'Lese die E-Mail …',
   add_task: 'Notiere …', list_tasks: 'Sehe Aufgaben durch …', complete_task: 'Hake ab …',
 }[n] || 'Arbeite …');
 
+/* ---------- Claude (anspruchsvolle Aufgaben, E-Mails) ---------- */
+async function runClaude(text) {
+  // Bisheriges Gespräch als reiner Text (gemeinsam für beide Gehirne) + aktuelle Frage
+  const msgs = history.map((h) => ({ role: h.role, content: h.text }));
+  msgs.push({ role: 'user', content: text });
+  for (let i = 0; i < 10; i++) {
+    const res = await callClaude(msgs, settings.webSearch);
+    msgs.push({ role: 'assistant', content: res.content });
+    if (res.stop_reason === 'pause_turn') continue;
+    if (res.stop_reason !== 'tool_use') return res.content.filter((b) => b.type === 'text').map((b) => b.text).join('').trim() || 'Erledigt.';
+    const results = [];
+    for (const b of res.content.filter((x) => x.type === 'tool_use')) {
+      setState('thinking', label(b.name));
+      let out;
+      try { out = await runTool(b.name, b.input || {}); } catch (e) { out = { fehler: e.message }; }
+      results.push({ type: 'tool_result', tool_use_id: b.id, content: JSON.stringify(out) });
+    }
+    msgs.push({ role: 'user', content: results });
+  }
+  return 'Das wurde mir zu verschachtelt, Sir. Formuliere es bitte etwas einfacher.';
+}
+
+/* ---------- Gemini (einfache Aufgaben, kostenlos) ---------- */
+const MAIL_TOOLS = ['search_emails', 'read_email'];
+const GEMINI_TOOLS = [
+  ...TOOLS.filter((t) => !MAIL_TOOLS.includes(t.name)).map((t) => {
+    const fn = { name: t.name, description: t.description };
+    if (Object.keys(t.input_schema.properties || {}).length) fn.parameters = t.input_schema; // Gemini mag keine leeren Objekte
+    return fn;
+  }),
+  { name: 'an_claude_uebergeben', description: 'An das stärkere Modell Claude übergeben, wenn die Aufgabe tiefe Analyse, Aktien-/ETF-Bewertung, Recherche, E-Mails oder komplexes Denken braucht.', parameters: { type: 'object', properties: { grund: { type: 'string' } } } },
+];
+async function callGemini(contents) {
+  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(settings.geminiModel)}:generateContent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-goog-api-key': settings.geminiKey },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: systemPrompt() + '\n- Du hast KEINEN Zugriff auf E-Mails. Bei E-Mail-Fragen, Aktienbewertungen, ETF-Empfehlungen oder Recherchen rufe an_claude_uebergeben auf.' }] },
+      contents,
+      tools: [{ functionDeclarations: GEMINI_TOOLS }],
+      generationConfig: { temperature: 0.6, maxOutputTokens: 1500 },
+    }),
+  });
+  const j = await r.json();
+  if (!r.ok) { const e = new Error('Gemini: ' + (j.error?.message || r.status)); e.status = r.status; throw e; }
+  return j;
+}
+async function runGemini(text) {
+  const contents = history.map((h) => ({ role: h.role === 'assistant' ? 'model' : 'user', parts: [{ text: h.text }] }));
+  contents.push({ role: 'user', parts: [{ text }] });
+  for (let i = 0; i < 6; i++) {
+    const j = await callGemini(contents);
+    const parts = j.candidates?.[0]?.content?.parts || [];
+    const calls = parts.filter((p) => p.functionCall);
+    if (!calls.length) return { text: parts.map((p) => p.text || '').join('').trim() || 'Erledigt.' };
+    contents.push({ role: 'model', parts });
+    const responses = [];
+    for (const { functionCall: { name, args } } of calls) {
+      if (name === 'an_claude_uebergeben') return { escalate: args?.grund || 'anspruchsvolle Aufgabe' };
+      setState('thinking', label(name));
+      let out;
+      try { out = await runTool(name, args || {}); } catch (e) { out = { fehler: e.message }; }
+      responses.push({ functionResponse: { name, response: { ergebnis: out } } });
+    }
+    contents.push({ role: 'user', parts: responses });
+  }
+  return { text: 'Das wurde mir zu verschachtelt, Sir.' };
+}
+
+/* ---------- Router: wer beantwortet was? ---------- */
+const MAIL_RE = /e-?mails?|posteingang|gmail|postfach|geschrieben|nachricht von/i;
+const COMPLEX_RE = /analys|einschätz|bewert|empfehl|etf|wochenbericht|bericht|briefing|strategie|invest|kaufen|verkaufen|prognose|vergleich|warum|erklär|recherch|zusammenfass|plan|portfolio|depot|risiko|chance/i;
+const SIMPLE_RE = /wetter|regen|wind|temperatur|sonne|schnee|gewitter|aufgabe|erinner|to-?do|notier|erledigt|uhrzeit|datum|wie spät|witz|hallo|hi jarvis|guten (morgen|tag|abend)|danke|kurs|wie steht|preis/i;
+function route(text) {
+  const hasG = !!settings.geminiKey, hasC = !!settings.anthropicKey;
+  if (!hasG && !hasC) return null;
+  if (MAIL_RE.test(text)) return hasC ? 'claude' : 'blocked';  // Mails nie an den kostenlosen Google-Tarif
+  if (!hasC || settings.routing === 'gemini') return 'gemini';
+  if (!hasG || settings.routing === 'claude') return 'claude';
+  if (text.trim().startsWith('!')) return 'claude';             // "!" am Anfang erzwingt Claude
+  if (COMPLEX_RE.test(text)) return 'claude';
+  if (SIMPLE_RE.test(text) || text.length < 140) return 'gemini';
+  return 'claude';
+}
+
 async function ask(text) {
   if (!text.trim()) return;
   addMsg('user', text);
-  if (!settings.anthropicKey) { addMsg('jarvis error', 'Mir fehlt noch mein Gehirn, Sir: Bitte trage in den Einstellungen (⚙) den Anthropic-Schlüssel ein.'); return; }
-  setState('thinking');
-  history.push({ role: 'user', content: text });
+  let brain = route(text);
+  if (!brain) { addMsg('jarvis error', 'Mir fehlt noch ein Gehirn, Sir: Bitte trage in den Einstellungen (⚙) einen Gemini- (kostenlos) oder Anthropic-Schlüssel ein.'); return; }
+  if (brain === 'blocked') { addMsg('jarvis error', 'Aus Datenschutzgründen lese ich E-Mails nur mit Claude, Sir – der kostenlose Gemini-Tarif darf Daten auswerten. Bitte trage einen Anthropic-Schlüssel ein.'); return; }
+  setState('thinking', brain === 'gemini' ? 'Gemini denkt nach …' : 'Claude denkt nach …');
   try {
-    for (let i = 0; i < 10; i++) {
-      const res = await callClaude(history, settings.webSearch);
-      history.push({ role: 'assistant', content: res.content });
-      if (res.stop_reason === 'pause_turn') continue;
-      if (res.stop_reason !== 'tool_use') {
-        trimHistory();
-        say(res.content.filter((b) => b.type === 'text').map((b) => b.text).join('').trim() || 'Erledigt.');
-        return;
+    let answer;
+    if (brain === 'gemini') {
+      try {
+        const r = await runGemini(text);
+        if (r.escalate) {
+          if (!settings.anthropicKey) answer = `Dafür bräuchte ich Claude, Sir (${r.escalate}). Ohne Anthropic-Schlüssel kann ich das nur oberflächlich.`;
+          else { brain = 'claude'; setState('thinking', 'Übergebe an Claude …'); answer = await runClaude(text); }
+        } else answer = r.text;
+      } catch (e) {
+        if (!settings.anthropicKey) throw e;
+        brain = 'claude'; setState('thinking', 'Gemini nicht verfügbar – Claude übernimmt …'); // z. B. Tageslimit erreicht
+        answer = await runClaude(text);
       }
-      const results = [];
-      for (const b of res.content.filter((x) => x.type === 'tool_use')) {
-        setState('thinking', label(b.name));
-        let out;
-        try { out = await runTool(b.name, b.input || {}); } catch (e) { out = { fehler: e.message }; }
-        results.push({ type: 'tool_result', tool_use_id: b.id, content: JSON.stringify(out) });
+    } else {
+      try { answer = await runClaude(text); }
+      catch (e) {
+        if (!settings.geminiKey || MAIL_RE.test(text)) throw e;
+        brain = 'gemini'; setState('thinking', 'Claude nicht verfügbar – Gemini übernimmt …');
+        const r = await runGemini(text);
+        answer = r.escalate ? 'Claude ist gerade nicht erreichbar und die Aufgabe ist für Gemini zu anspruchsvoll, Sir.' : r.text;
       }
-      history.push({ role: 'user', content: results });
     }
-    say('Das wurde mir zu verschachtelt, Sir. Formuliere es bitte etwas einfacher.');
+    history.push({ role: 'user', text }, { role: 'assistant', text: answer });
+    while (history.length > 20) history.splice(0, 2);
+    say(answer, true, brain);
   } catch (e) {
-    history = []; setState('idle'); addMsg('jarvis error', 'Fehler: ' + e.message);
+    setState('idle'); addMsg('jarvis error', 'Fehler: ' + e.message);
   }
 }
 
@@ -602,8 +689,8 @@ function speak(text, onEnd) {
   u.onend = u.onerror = () => { setState('idle'); onEnd?.(); };
   speechSynthesis.cancel(); speechSynthesis.speak(u);
 }
-function say(text, alsoLog = true) {
-  if (alsoLog) addMsg('jarvis', text);
+function say(text, alsoLog = true, brain) {
+  if (alsoLog) addMsg('jarvis', text, brain);
   if (!settings.voice || !('speechSynthesis' in window)) { setState('idle'); return; }
   speak(text);
 }
@@ -638,10 +725,11 @@ function md(s) {
     '<ul>' + list.trim().split('\n').map((l) => `<li>${l.replace(/^[-•*] /, '')}</li>`).join('') + '</ul>');
   return h.replace(/\n/g, '<br>');
 }
-function addMsg(cls, text) {
+function addMsg(cls, text, brain) {
   const d = document.createElement('div');
   d.className = 'msg ' + cls;
-  d.innerHTML = md(text);
+  const tag = brain ? `<span class="brain ${brain}">${brain === 'gemini' ? '⚡ GEMINI · kostenlos' : '◆ CLAUDE'}</span>` : '';
+  d.innerHTML = tag + md(text);
   $('#log').prepend(d);
   while ($('#log').children.length > 30) $('#log').lastChild.remove();
 }
@@ -676,7 +764,7 @@ $('#sAccent').addEventListener('change', (e) => setAccent(e.target.value));
 $('#sDensity').addEventListener('change', (e) => { theme.density = Number(e.target.value); saveTheme(); });
 
 /* ======================= Einstellungen ======================= */
-const FIELDS = { sAnthropic: 'anthropicKey', sFinnhub: 'finnhubKey', sModel: 'model', sGClient: 'googleClientId', sGSecret: 'googleSecret', sGRefresh: 'googleRefresh', sPitch: 'pitch', sRate: 'rate' };
+const FIELDS = { sGemini: 'geminiKey', sGeminiModel: 'geminiModel', sRouting: 'routing', sAnthropic: 'anthropicKey', sFinnhub: 'finnhubKey', sModel: 'model', sGClient: 'googleClientId', sGSecret: 'googleSecret', sGRefresh: 'googleRefresh', sPitch: 'pitch', sRate: 'rate' };
 $('#btnSettings').addEventListener('click', () => {
   for (const [id, k] of Object.entries(FIELDS)) $('#' + id).value = settings[k];
   $('#sWatch').value = settings.watchlist.join(', ');
@@ -691,6 +779,8 @@ $('#settings').addEventListener('close', async () => {
   if ($('#settings').returnValue !== 'save') return;
   for (const [id, k] of Object.entries(FIELDS)) settings[k] = $('#' + id).value.trim();
   settings.model ||= 'claude-sonnet-5-5';
+  settings.geminiModel ||= 'gemini-2.5-flash';
+  settings.routing ||= 'auto';
   settings.watchlist = $('#sWatch').value.split(/[,\s]+/).map((s) => s.trim().toUpperCase()).filter(Boolean);
   settings.voice = $('#sVoice').checked; settings.webSearch = $('#sWeb').checked;
   settings.voiceName = $('#sVoiceName').value;
