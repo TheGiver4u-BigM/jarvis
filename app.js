@@ -4,7 +4,7 @@
 const $ = (s) => document.querySelector(s);
 
 /* ======================= Versions-Check: passen Seite und Programm zusammen? ======================= */
-const APP_VERSION = '8';
+const APP_VERSION = '9';
 (() => {
   const pageVersion = document.querySelector('meta[name="jarvis-version"]')?.content;
   const el = document.getElementById('appVersion');
@@ -606,14 +606,29 @@ const GEMINI_TOOLS = [
   { name: 'an_claude_uebergeben', description: 'An das stärkere Modell Claude übergeben, wenn die Aufgabe tiefe Analyse, Aktien-/ETF-Bewertung, Recherche, E-Mails oder komplexes Denken braucht.', parameters: { type: 'object', properties: { grund: { type: 'string' } } } },
 ];
 // Wenn das eingestellte Modell nicht (mehr) existiert: neuestes "Flash"-Modell suchen
-async function findGeminiModel() {
+// Alle Text-Modelle des Schlüssels holen und so sortieren, dass die üblicherweise kostenlosen zuerst kommen
+async function geminiCandidates() {
   const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', { headers: { 'x-goog-api-key': settings.geminiKey } });
   const j = await r.json();
   if (!r.ok) throw new Error('Gemini: ' + explainError(r.status, j.error?.message || String(r.status)));
-  const names = (j.models || []).filter((m) => m.supportedGenerationMethods?.includes('generateContent')).map((m) => m.name.replace('models/', ''));
-  const stable = names.filter((n) => /flash/.test(n) && !/lite|image|tts|live|audio|exp|preview|thinking|\d{3,}$/.test(n)).sort().reverse();
-  return stable[0] || names.filter((n) => /flash/.test(n)).sort().reverse()[0] || names[0];
+  const names = (j.models || []).filter((m) => m.supportedGenerationMethods?.includes('generateContent'))
+    .map((m) => m.name.replace('models/', ''))
+    .filter((n) => /flash/.test(n) && !/image|tts|live|audio|embed|vision/.test(n));
+  const ver = (n) => parseFloat((n.match(/gemini-(\d+(?:\.\d+)?)/) || [0, 0])[1]);
+  const rank = (n) => {
+    if (n === 'gemini-flash-latest') return 0;                    // Googles Alias auf das aktuelle Flash
+    if (/^gemini-\d+(\.\d+)?-flash$/.test(n)) return 1;            // nummerierte Flash-Modelle
+    if (n === 'gemini-flash-lite-latest') return 2;
+    if (/^gemini-\d+(\.\d+)?-flash-lite$/.test(n)) return 3;       // Lite: meist großzügiges Gratis-Kontingent
+    if (/preview|exp|\d{3,}$/.test(n)) return 5;
+    return 4;                                                      // Sonder-Varianten (z. B. "omni") zuletzt
+  };
+  return names.sort((a, b) => rank(a) - rank(b) || ver(b) - ver(a));
 }
+const geminiTried = new Set();
+// "limit: 0" = Modell im kostenlosen Tarif gar nicht freigegeben; 404 = Modell existiert nicht (mehr)
+const modelUnusable = (status, msg) => status === 404 || /not found|not supported|is not available/i.test(msg) || (status === 429 && /limit:\s*0\b/.test(msg));
+
 async function callGemini(contents, retried) {
   const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(settings.geminiModel)}:generateContent`, {
     method: 'POST',
@@ -628,11 +643,23 @@ async function callGemini(contents, retried) {
   const j = await r.json();
   if (!r.ok) {
     const msg = j.error?.message || String(r.status);
-    if (!retried && (r.status === 404 || /not found|not supported|is not available/i.test(msg))) {
-      const m = await findGeminiModel();
-      if (m && m !== settings.geminiModel) { settings.geminiModel = m; await saveVault(); return callGemini(contents, true); }
+    if (modelUnusable(r.status, msg)) {
+      geminiTried.add(settings.geminiModel);
+      const next = (await geminiCandidates()).find((n) => !geminiTried.has(n));
+      if (next) {
+        setState('thinking', `Probiere Modell ${next} …`);
+        settings.geminiModel = next; await saveVault();
+        return callGemini(contents, true);
+      }
+      const e = new Error(`Gemini: Keines deiner ${geminiTried.size} verfügbaren Modelle ist im kostenlosen Tarif freigegeben (geprüft: ${[...geminiTried].join(', ')}). `
+        + 'Entweder in Google AI Studio die Abrechnung aktivieren (sehr günstig) oder einen Anthropic-Schlüssel eintragen.');
+      e.status = r.status; throw e;
     }
-    const e = new Error('Gemini: ' + explainError(r.status, msg)); e.status = r.status; throw e;
+    // Kurze, verständliche Meldung statt des langen Google-Textes
+    const short = r.status === 429
+      ? `Kostenloses Limit für ${settings.geminiModel} erreicht.${(msg.match(/retry in ([\d.]+)s/) ? ` Wieder verfügbar in ca. ${Math.ceil(parseFloat(msg.match(/retry in ([\d.]+)s/)[1]) / 60)} Min.` : ' Bitte später erneut versuchen.')}`
+      : explainError(r.status, msg.split('\n')[0]);
+    const e = new Error('Gemini: ' + short); e.status = r.status; throw e;
   }
   return j;
 }
