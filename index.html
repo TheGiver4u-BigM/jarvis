@@ -3,15 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://api.anthropic.com https://generativelanguage.googleapis.com https://api.open-meteo.com https://geocoding-api.open-meteo.com https://api.bigdatacloud.net https://finnhub.io https://oauth2.googleapis.com https://gmail.googleapis.com https://api.elevenlabs.io; media-src 'self' blob:; manifest-src 'self'; worker-src 'self'; base-uri 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://api.anthropic.com https://generativelanguage.googleapis.com https://api.open-meteo.com https://geocoding-api.open-meteo.com https://api.bigdatacloud.net https://finnhub.io https://oauth2.googleapis.com https://gmail.googleapis.com https://api.elevenlabs.io https://huggingface.co https://*.huggingface.co https://*.hf.co; media-src 'self' blob:; manifest-src 'self'; worker-src 'self'; base-uri 'none'; object-src 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#030405">
 <title>J.A.R.V.I.S.</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
-<meta name="jarvis-version" content="10">
-<link rel="stylesheet" href="style.css?v=10">
+<meta name="jarvis-version" content="11">
+<link rel="stylesheet" href="style.css?v=11">
 </head>
 <body class="locked">
 
@@ -153,11 +153,24 @@
       <label class="row"><input id="sVoice" type="checkbox"> Antworten vorlesen</label>
       <label>Art der Stimme
         <select id="sVoiceEngine">
+          <option value="piper">Eigene Jarvis-Stimme – kostenlos, ohne Limit, auf dem Gerät</option>
           <option value="gemini">Realistisch – Gemini (gleicher Schlüssel)</option>
           <option value="eleven">Sehr realistisch – ElevenLabs (eigener Schlüssel)</option>
           <option value="device">Gerätestimme (roboterhaft, offline)</option>
         </select>
       </label>
+
+      <label data-engine="piper">Jarvis-Stimme
+        <select id="sPiperVoice">
+          <option value="de_DE-thorsten-medium">Thorsten – männlich, klar (ca. 60 MB, empfohlen)</option>
+          <option value="de_DE-thorsten-high">Thorsten HD – beste Qualität (ca. 110 MB, langsamer)</option>
+        </select>
+      </label>
+      <div data-engine="piper">
+        <button type="button" id="btnPiperLoad">⬇ Stimme jetzt herunterladen</button>
+        <div id="piperOut" class="test-out"></div>
+        <p class="hint">Einmaliger Download, danach dauerhaft auf dem Handy gespeichert und offline nutzbar. Auch Mails und Berichte liest Jarvis damit vor, weil nichts das Gerät verlässt.</p>
+      </div>
 
       <label data-engine="gemini">Gemini-Stimme
         <select id="sGeminiVoice">
@@ -192,9 +205,9 @@
       <label data-engine="device">Gerätestimme<select id="sVoiceName"></select></label>
       <label data-engine="device">Tonhöhe <span id="pitchVal"></span><input id="sPitch" type="range" min="0.5" max="1.5" step="0.05"></label>
       <label data-engine="device">Tempo <span id="rateVal"></span><input id="sRate" type="range" min="0.7" max="1.4" step="0.05"></label>
-      <label class="row" data-engine="gemini eleven"><input id="sLongDevice" type="checkbox"> Lange Berichte mit Gerätestimme (spart Kontingent)</label>
+      <label class="row" data-engine="gemini eleven"><input id="sLongDevice" type="checkbox"> Lange Berichte mit der eigenen Jarvis-Stimme (spart Kontingent)</label>
       <button type="button" id="btnVoiceTest">▶ Probe hören</button>
-      <p class="hint">Antworten zu E-Mails liest Jarvis aus Datenschutzgründen immer mit der Gerätestimme vor.</p>
+      <p class="hint" data-engine="gemini eleven">Ist das Kontingent leer, spricht Jarvis automatisch mit seiner eigenen Stimme weiter. Antworten zu E-Mails liest er aus Datenschutzgründen nie über einen Cloud-Dienst vor.</p>
     </fieldset>
 
     <fieldset>
@@ -220,6 +233,6 @@
   </form>
 </dialog>
 
-<script src="app.js?v=10"></script>
+<script src="app.js?v=11"></script>
 </body>
 </html>
