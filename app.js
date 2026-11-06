@@ -2,6 +2,22 @@
 'use strict';
 
 const $ = (s) => document.querySelector(s);
+
+/* ======================= Versions-Check: passen Seite und Programm zusammen? ======================= */
+const APP_VERSION = '8';
+(() => {
+  const pageVersion = document.querySelector('meta[name="jarvis-version"]')?.content;
+  const el = document.getElementById('appVersion');
+  if (el) el.textContent = `Jarvis Version ${APP_VERSION}`;
+  if (pageVersion && pageVersion !== APP_VERSION && !sessionStorage.getItem('jarvis-updating')) {
+    // Alte und neue Dateien gemischt (Zwischenspeicher) → alles frisch laden
+    sessionStorage.setItem('jarvis-updating', '1');
+    Promise.all([
+      navigator.serviceWorker?.getRegistrations().then((rs) => Promise.all(rs.map((r) => r.update()))),
+      caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== 'jarvis-inbox').map((k) => caches.delete(k)))),
+    ]).finally(() => location.replace(location.pathname + '?u=' + Date.now()));
+  } else sessionStorage.removeItem('jarvis-updating');
+})();
 const store = {
   get(k, d) { try { const v = localStorage.getItem('jarvis.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('jarvis.' + k, JSON.stringify(v)); } catch { /* ignorieren */ } },
