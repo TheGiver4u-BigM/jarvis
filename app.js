@@ -4,7 +4,7 @@
 const $ = (s) => document.querySelector(s);
 
 /* ======================= Versions-Check: passen Seite und Programm zusammen? ======================= */
-const APP_VERSION = '9';
+const APP_VERSION = '10';
 (() => {
   const pageVersion = document.querySelector('meta[name="jarvis-version"]')?.content;
   const el = document.getElementById('appVersion');
@@ -110,6 +110,7 @@ const orb = (() => {
     setColor(rgb) { color = rgb; },
     setDensity(n) { build(Math.max(300, Math.min(3000, Number(n) || 1400))); },
     beat() { pulse = 1; },
+    level(v) { pulse = Math.max(pulse, Math.min(1, v * 5)); }, // echte Lautstärke der KI-Stimme
   };
 })();
 applyTheme();
@@ -120,6 +121,9 @@ const settings = {
   geminiKey: '', geminiModel: 'gemini-2.5-flash', routing: 'auto',
   googleClientId: '', googleSecret: '', googleRefresh: '',
   voice: true, voiceName: '', pitch: 0.85, rate: 1.0,
+  voiceEngine: 'gemini', geminiVoice: 'Charon', ttsModel: '', longDevice: true,
+  voiceStyle: 'Sprich auf Deutsch, ruhig, tief, kultiviert und souverän – wie ein erfahrener, leicht ironischer britischer Butler. Natürliche Pausen, kein Vorlesen-Ton:',
+  elevenKey: '', elevenVoice: 'JBFqnCBsd6RMkjVDRZzb',
 };
 let tasks = [];
 let history = [];
@@ -747,7 +751,7 @@ async function ask(text) {
     }
     history.push({ role: 'user', text }, { role: 'assistant', text: answer });
     while (history.length > 20) history.splice(0, 2);
-    say(answer, true, brain);
+    say(answer, true, brain, MAIL_RE.test(text)); // Antworten zu Mails nur mit Gerätestimme vorlesen
   } catch (e) {
     setState('idle'); addMsg('jarvis error', 'Fehler: ' + e.message);
   }
@@ -792,19 +796,136 @@ function pickVoice() {
     || vs.find((v) => /\bmale\b|männlich|conrad|stefan|klaus|markus|hans|killian|florian/i.test(v.name))
     || vs[0] || null;
 }
-function speak(text, onEnd) {
-  const plain = text.replace(/[*#_`>|]/g, '').replace(/https?:\/\/\S+/g, '').replace(/\n+/g, '. ');
-  const u = new SpeechSynthesisUtterance(plain);
-  u.lang = 'de-DE'; u.voice = pickVoice(); u.pitch = Number(settings.pitch); u.rate = Number(settings.rate);
-  u.onstart = () => setState('speaking');
-  u.onboundary = () => orb.beat(); // Kern pulsiert bei jedem Wort
-  u.onend = u.onerror = () => { setState('idle'); onEnd?.(); };
-  speechSynthesis.cancel(); speechSynthesis.speak(u);
+/* ---------- Gerätestimme (Notlösung, klingt roboterhaft) ---------- */
+function deviceSpeak(plain) {
+  return new Promise((resolve) => {
+    if (!('speechSynthesis' in window)) { resolve(); return; }
+    const u = new SpeechSynthesisUtterance(plain);
+    u.lang = 'de-DE'; u.voice = pickVoice(); u.pitch = Number(settings.pitch); u.rate = Number(settings.rate);
+    u.onstart = () => setState('speaking');
+    u.onboundary = () => orb.beat(); // Kern pulsiert bei jedem Wort
+    u.onend = u.onerror = () => resolve();
+    speechSynthesis.cancel(); speechSynthesis.speak(u);
+  });
 }
-function say(text, alsoLog = true, brain) {
+
+/* ---------- Realistische KI-Stimmen ---------- */
+// Gemini liefert rohes PCM-Audio → mit WAV-Kopf versehen, damit der Browser es abspielen kann
+function wavHeader(dataLen, rate) {
+  const b = new DataView(new ArrayBuffer(44));
+  const str = (o, s) => [...s].forEach((c, i) => b.setUint8(o + i, c.charCodeAt(0)));
+  str(0, 'RIFF'); b.setUint32(4, 36 + dataLen, true); str(8, 'WAVE'); str(12, 'fmt ');
+  b.setUint32(16, 16, true); b.setUint16(20, 1, true); b.setUint16(22, 1, true);
+  b.setUint32(24, rate, true); b.setUint32(28, rate * 2, true); b.setUint16(32, 2, true); b.setUint16(34, 16, true);
+  str(36, 'data'); b.setUint32(40, dataLen, true);
+  return b.buffer;
+}
+async function findTtsModel() {
+  const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', { headers: { 'x-goog-api-key': settings.geminiKey } });
+  const j = await r.json();
+  if (!r.ok) throw new Error(explainError(r.status, j.error?.message || String(r.status)));
+  const ver = (n) => parseFloat((n.match(/gemini-(\d+(?:\.\d+)?)/) || [0, 0])[1]);
+  const tts = (j.models || []).map((m) => m.name.replace('models/', '')).filter((n) => /tts/.test(n));
+  tts.sort((a, b) => (/pro/.test(a) - /pro/.test(b)) || ver(b) - ver(a)); // Flash vor Pro (eher kostenlos), neueste zuerst
+  if (!tts.length) throw new Error('Kein Sprachmodell für diesen Schlüssel verfügbar');
+  return tts[0];
+}
+async function geminiTTS(text, retried) {
+  if (!settings.geminiKey) throw new Error('kein Gemini-Schlüssel');
+  if (!settings.ttsModel) { settings.ttsModel = await findTtsModel(); saveVault(); }
+  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(settings.ttsModel)}:generateContent`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': settings.geminiKey },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: `${settings.voiceStyle}\n\n${text}` }] }],
+      generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: settings.geminiVoice } } } },
+    }),
+  });
+  const j = await r.json();
+  if (!r.ok) {
+    const msg = j.error?.message || String(r.status);
+    if (!retried && (r.status === 404 || /not found|not supported/i.test(msg))) { settings.ttsModel = ''; return geminiTTS(text, true); }
+    throw new Error(r.status === 429 ? (/limit:\s*0\b/.test(msg) ? 'Gemini-Stimme ist im kostenlosen Tarif nicht freigegeben' : 'Limit der Gemini-Stimme erreicht') : explainError(r.status, msg.split('\n')[0]));
+  }
+  const part = j.candidates?.[0]?.content?.parts?.find((p) => p.inlineData);
+  if (!part) throw new Error('keine Audiodaten erhalten');
+  const rate = Number((part.inlineData.mimeType.match(/rate=(\d+)/) || [0, 24000])[1]);
+  const pcm = unb64(part.inlineData.data);
+  return new Blob([wavHeader(pcm.length, rate), pcm], { type: 'audio/wav' });
+}
+async function elevenTTS(text) {
+  if (!settings.elevenKey) throw new Error('kein ElevenLabs-Schlüssel');
+  const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(settings.elevenVoice)}?output_format=mp3_44100_128`, {
+    method: 'POST',
+    headers: { 'xi-api-key': settings.elevenKey, 'content-type': 'application/json', accept: 'audio/mpeg' },
+    body: JSON.stringify({ text, model_id: 'eleven_multilingual_v2', voice_settings: { stability: 0.55, similarity_boost: 0.75, style: 0.25, use_speaker_boost: true } }),
+  });
+  if (!r.ok) {
+    let m = String(r.status);
+    try { const j = await r.json(); m = j.detail?.message || j.detail?.status || (typeof j.detail === 'string' ? j.detail : JSON.stringify(j)); } catch { /* kein JSON */ }
+    throw new Error(/quota|credits|limit/i.test(m) ? 'Monatliches Gratis-Kontingent von ElevenLabs aufgebraucht' : explainError(r.status, m));
+  }
+  return r.blob();
+}
+
+// Abspielen + Kern pulsiert passend zur echten Lautstärke
+let currentAudio = null, audioCtx = null;
+function playBlob(blob) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const a = new Audio(url);
+    currentAudio = a;
+    const done = () => { URL.revokeObjectURL(url); if (currentAudio === a) currentAudio = null; resolve(); };
+    a.onended = done; a.addEventListener('stopped', done);
+    a.onerror = () => { URL.revokeObjectURL(url); currentAudio = null; reject(new Error('Wiedergabe fehlgeschlagen')); };
+    a.onplay = () => setState('speaking');
+    try {
+      audioCtx ||= new (window.AudioContext || window.webkitAudioContext)();
+      audioCtx.resume();
+      const an = audioCtx.createAnalyser(); an.fftSize = 512;
+      audioCtx.createMediaElementSource(a).connect(an); an.connect(audioCtx.destination);
+      const buf = new Uint8Array(an.fftSize);
+      const loop = () => {
+        if (currentAudio !== a) return;
+        an.getByteTimeDomainData(buf);
+        let s = 0; for (const v of buf) { const d = (v - 128) / 128; s += d * d; }
+        orb.level(Math.sqrt(s / buf.length));
+        requestAnimationFrame(loop);
+      };
+      a.addEventListener('play', loop);
+    } catch { /* ohne Analyse abspielen */ }
+    a.play().catch(reject);
+  });
+}
+function stopSpeaking() {
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
+  if (currentAudio) { const a = currentAudio; a.pause(); a.dispatchEvent(new Event('stopped')); }
+}
+
+let voiceWarned = false;
+// sensitive = enthält evtl. Mail-Inhalte → nie an einen Cloud-Sprachdienst schicken
+async function speak(text, sensitive = false) {
+  const plain = text.replace(/[*#_`>|•]/g, '').replace(/https?:\/\/\S+/g, '').replace(/\n+/g, '. ').trim();
+  stopSpeaking();
+  const engine = settings.voiceEngine;
+  const tooLong = settings.longDevice && plain.length > 900;
+  if (engine !== 'device' && !sensitive && !tooLong) {
+    try {
+      setState('thinking', 'Stimme wird erzeugt …');
+      const blob = engine === 'eleven' ? await elevenTTS(plain) : await geminiTTS(plain);
+      await playBlob(blob);
+      setState('idle');
+      return;
+    } catch (e) {
+      if (!voiceWarned) { voiceWarned = true; addMsg('jarvis error', `Realistische Stimme gerade nicht verfügbar (${e.message}) – ich nutze vorerst die Gerätestimme.`); }
+    }
+  }
+  await deviceSpeak(plain);
+  setState('idle');
+}
+function say(text, alsoLog = true, brain, sensitive = false) {
   if (alsoLog) addMsg('jarvis', text, brain);
-  if (!settings.voice || !('speechSynthesis' in window)) { setState('idle'); return; }
-  speak(text);
+  if (!settings.voice) { setState('idle'); return; }
+  speak(text, sensitive);
 }
 function fillVoiceList() {
   const sel = $('#sVoiceName'), vs = germanVoices(), cur = pickVoice();
@@ -814,16 +935,23 @@ function fillVoiceList() {
 if ('speechSynthesis' in window) speechSynthesis.addEventListener('voiceschanged', fillVoiceList);
 $('#sPitch').addEventListener('input', (e) => { $('#pitchVal').textContent = e.target.value; });
 $('#sRate').addEventListener('input', (e) => { $('#rateVal').textContent = e.target.value; });
-$('#btnVoiceTest').addEventListener('click', () => {
-  const keep = { voiceName: settings.voiceName, pitch: settings.pitch, rate: settings.rate };
-  Object.assign(settings, { voiceName: $('#sVoiceName').value, pitch: $('#sPitch').value, rate: $('#sRate').value });
-  speak('Guten Abend, Sir. Alle Systeme sind einsatzbereit. Darf ich Ihnen das Wetter in Lügde vorlesen?');
+const VOICE_FIELDS = { sVoiceName: 'voiceName', sPitch: 'pitch', sRate: 'rate', sVoiceEngine: 'voiceEngine', sGeminiVoice: 'geminiVoice', sVoiceStyle: 'voiceStyle', sElevenKey: 'elevenKey', sElevenVoice: 'elevenVoice' };
+$('#btnVoiceTest').addEventListener('click', async () => {
+  const keep = {};
+  for (const [id, k] of Object.entries(VOICE_FIELDS)) { keep[k] = settings[k]; settings[k] = $('#' + id).value.trim(); }
+  voiceWarned = false;
+  await speak('Guten Abend, Sir. Alle Systeme sind einsatzbereit. Das Wetter in Lügde ist klar, sieben Grad. Darf ich sonst noch etwas für Sie tun?');
   Object.assign(settings, keep);
 });
+function updateVoiceFields() {
+  const e = $('#sVoiceEngine').value;
+  document.querySelectorAll('[data-engine]').forEach((el) => { el.hidden = !el.dataset.engine.split(' ').includes(e); });
+}
+$('#sVoiceEngine').addEventListener('change', updateVoiceFields);
 
 $('#reactor').addEventListener('click', () => {
   const r = $('#reactor');
-  if (r.classList.contains('speaking')) { speechSynthesis.cancel(); setState('idle'); return; }
+  if (r.classList.contains('speaking')) { stopSpeaking(); setState('idle'); return; }
   if (r.classList.contains('listening')) { recog?.stop(); setState('idle'); return; }
   if (!settings.geminiKey && !settings.anthropicKey) { // erst gar nicht zuhören, wenn kein Gehirn da ist
     addMsg('jarvis error', 'Ich kann dich hören, Sir, aber mir fehlt noch ein KI-Gehirn zum Antworten. Tippe oben auf **⚙** und trage unter **KI-Gehirne** einen **Gemini-API-Schlüssel** ein – kostenlos auf aistudio.google.com („Get API key“).');
@@ -881,11 +1009,12 @@ $('#sAccent').addEventListener('change', (e) => setAccent(e.target.value));
 $('#sDensity').addEventListener('change', (e) => { theme.density = Number(e.target.value); saveTheme(); });
 
 /* ======================= Einstellungen ======================= */
-const FIELDS = { sGemini: 'geminiKey', sGeminiModel: 'geminiModel', sRouting: 'routing', sAnthropic: 'anthropicKey', sFinnhub: 'finnhubKey', sModel: 'model', sGClient: 'googleClientId', sGSecret: 'googleSecret', sGRefresh: 'googleRefresh', sPitch: 'pitch', sRate: 'rate' };
+const FIELDS = { sVoiceEngine: 'voiceEngine', sGeminiVoice: 'geminiVoice', sVoiceStyle: 'voiceStyle', sElevenKey: 'elevenKey', sElevenVoice: 'elevenVoice', sGemini: 'geminiKey', sGeminiModel: 'geminiModel', sRouting: 'routing', sAnthropic: 'anthropicKey', sFinnhub: 'finnhubKey', sModel: 'model', sGClient: 'googleClientId', sGSecret: 'googleSecret', sGRefresh: 'googleRefresh', sPitch: 'pitch', sRate: 'rate' };
 $('#btnSettings').addEventListener('click', () => {
   for (const [id, k] of Object.entries(FIELDS)) $('#' + id).value = settings[k];
   $('#sWatch').value = settings.watchlist.join(', ');
   $('#sVoice').checked = settings.voice; $('#sWeb').checked = settings.webSearch;
+  $('#sLongDevice').checked = settings.longDevice; updateVoiceFields();
   $('#pitchVal').textContent = settings.pitch; $('#rateVal').textContent = settings.rate;
   $('#sNewPin').value = $('#sNewPin2').value = ''; $('#gTestOut').textContent = '';
   fillVoiceList();
@@ -900,6 +1029,8 @@ $('#settings').addEventListener('close', async () => {
   settings.routing ||= 'auto';
   settings.watchlist = $('#sWatch').value.split(/[,\s]+/).map((s) => s.trim().toUpperCase()).filter(Boolean);
   settings.voice = $('#sVoice').checked; settings.webSearch = $('#sWeb').checked;
+  settings.longDevice = $('#sLongDevice').checked; voiceWarned = false;
+  settings.voiceEngine ||= 'gemini';
   settings.voiceName = $('#sVoiceName').value;
   gAccess = null;
   const p1 = $('#sNewPin').value, p2 = $('#sNewPin2').value;
@@ -960,7 +1091,7 @@ async function showReports(onlyUnread, speakLatest) {
     const when = new Date(d.zeit).toLocaleString('de-DE', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
     addMsg('jarvis', `**${d.titel}** · ${when}\n\n${d.text}`);
   });
-  if (speakLatest) say(items[0].text, false);
+  if (speakLatest) say(items[0].text, false, undefined, true); // Berichte können Mails enthalten
   else setState('idle', 'Neuer Bericht – „Letzter Bericht“ tippen zum Vorlesen');
   list.forEach((x) => { x.gelesen = true; });
   saveInbox(list);
