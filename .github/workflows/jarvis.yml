@@ -28,7 +28,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
       - run: npm install --no-save --no-audit --no-fund web-push@3.6.7
       - run: node briefing.mjs
         env:
