@@ -663,15 +663,34 @@ async function ask(text) {
 /* ======================= Sprache & Stimme ======================= */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recog = null;
+const SR_ERRORS = {
+  'not-allowed': 'Mikrofon ist nicht erlaubt. Android: Einstellungen → Apps → Jarvis (bzw. Chrome) → Berechtigungen → Mikrofon → „Bei Nutzung erlauben“.',
+  'service-not-allowed': 'Die Spracherkennung ist blockiert. Prüfe, ob „Google“ bzw. „Sprachdienste von Google“ auf dem Handy aktiviert und aktuell ist.',
+  'audio-capture': 'Kein Mikrofon gefunden oder es wird gerade von einer anderen App benutzt.',
+  'network': 'Die Spracherkennung braucht Internet – bitte Verbindung prüfen.',
+  'no-speech': 'Ich habe nichts gehört, Sir. Tippe auf den Kern und sprich direkt danach.',
+  'language-not-supported': 'Deutsch ist für die Spracherkennung nicht installiert. Android: Einstellungen → Google → Spracheingabe → Sprachen → Deutsch.',
+  'aborted': null, // selbst abgebrochen – keine Meldung
+};
 function listen() {
-  if (!SR) { setState('idle', 'Spracheingabe wird hier nicht unterstützt – bitte tippen'); return; }
+  if (!SR) {
+    addMsg('jarvis error', 'Spracheingabe wird in diesem Browser nicht unterstützt. Auf dem Samsung bitte die App über **Chrome** installieren (nicht Samsung Internet). Bis dahin kannst du unten tippen.');
+    setState('idle', 'Spracheingabe nicht verfügbar – bitte tippen');
+    return;
+  }
   recog = new SR();
   recog.lang = 'de-DE'; recog.interimResults = false; recog.maxAlternatives = 1;
   recog.onresult = (e) => { const t = e.results[0][0].transcript; recog = null; ask(t); };
-  recog.onerror = () => { recog = null; setState('idle', 'Nicht verstanden – nochmal tippen'); };
+  recog.onerror = (e) => {
+    recog = null;
+    const msg = e.error in SR_ERRORS ? SR_ERRORS[e.error] : `Spracherkennung fehlgeschlagen (${e.error}).`;
+    setState('idle', msg ? 'Spracheingabe fehlgeschlagen – Details unten' : undefined);
+    if (msg) addMsg('jarvis error', msg);
+  };
   recog.onend = () => { if ($('#reactor').classList.contains('listening')) setState('idle'); };
   setState('listening');
-  recog.start();
+  try { recog.start(); }
+  catch (e) { recog = null; setState('idle'); addMsg('jarvis error', 'Spracheingabe konnte nicht starten: ' + e.message); }
 }
 function germanVoices() { return ('speechSynthesis' in window) ? speechSynthesis.getVoices().filter((v) => v.lang.toLowerCase().startsWith('de')) : []; }
 function pickVoice() {
@@ -713,6 +732,11 @@ $('#reactor').addEventListener('click', () => {
   const r = $('#reactor');
   if (r.classList.contains('speaking')) { speechSynthesis.cancel(); setState('idle'); return; }
   if (r.classList.contains('listening')) { recog?.stop(); setState('idle'); return; }
+  if (!settings.geminiKey && !settings.anthropicKey) { // erst gar nicht zuhören, wenn kein Gehirn da ist
+    addMsg('jarvis error', 'Ich kann dich hören, Sir, aber mir fehlt noch ein KI-Gehirn zum Antworten. Tippe oben auf **⚙** und trage unter **KI-Gehirne** einen **Gemini-API-Schlüssel** ein – kostenlos auf aistudio.google.com („Get API key“).');
+    setState('idle', 'Kein KI-Schlüssel eingetragen');
+    return;
+  }
   if (r.classList.contains('thinking')) return;
   listen();
 });
@@ -848,7 +872,7 @@ function start() {
   setInterval(checkReminders, 30000);
   if ('speechSynthesis' in window) speechSynthesis.getVoices();
   showReports(true, false);
-  if (!settings.anthropicKey) addMsg('jarvis', 'Guten Tag, Sir. Ich bin bereit, sobald du in den Einstellungen (⚙) meine Schlüssel hinterlegst.');
+  if (!settings.geminiKey && !settings.anthropicKey) addMsg('jarvis', 'Guten Tag, Sir. Damit ich antworten kann, trage bitte unter **⚙ → KI-Gehirne** einen Gemini-Schlüssel ein (kostenlos auf aistudio.google.com).');
 }
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js');
 setupLockScreen();
