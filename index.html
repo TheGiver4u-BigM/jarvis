@@ -3,15 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://api.anthropic.com https://generativelanguage.googleapis.com https://api.open-meteo.com https://geocoding-api.open-meteo.com https://api.bigdatacloud.net https://finnhub.io https://oauth2.googleapis.com https://gmail.googleapis.com; manifest-src 'self'; worker-src 'self'; base-uri 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://api.anthropic.com https://generativelanguage.googleapis.com https://api.open-meteo.com https://geocoding-api.open-meteo.com https://api.bigdatacloud.net https://finnhub.io https://oauth2.googleapis.com https://gmail.googleapis.com https://api.elevenlabs.io; media-src 'self' blob:; manifest-src 'self'; worker-src 'self'; base-uri 'none'; object-src 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#030405">
 <title>J.A.R.V.I.S.</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
-<meta name="jarvis-version" content="9">
-<link rel="stylesheet" href="style.css?v=9">
+<meta name="jarvis-version" content="10">
+<link rel="stylesheet" href="style.css?v=10">
 </head>
 <body class="locked">
 
@@ -151,10 +151,50 @@
     <fieldset>
       <legend>Stimme</legend>
       <label class="row"><input id="sVoice" type="checkbox"> Antworten vorlesen</label>
-      <label>Stimme<select id="sVoiceName"></select></label>
-      <label>Tonhöhe <span id="pitchVal"></span><input id="sPitch" type="range" min="0.5" max="1.5" step="0.05"></label>
-      <label>Tempo <span id="rateVal"></span><input id="sRate" type="range" min="0.7" max="1.4" step="0.05"></label>
+      <label>Art der Stimme
+        <select id="sVoiceEngine">
+          <option value="gemini">Realistisch – Gemini (gleicher Schlüssel)</option>
+          <option value="eleven">Sehr realistisch – ElevenLabs (eigener Schlüssel)</option>
+          <option value="device">Gerätestimme (roboterhaft, offline)</option>
+        </select>
+      </label>
+
+      <label data-engine="gemini">Gemini-Stimme
+        <select id="sGeminiVoice">
+          <option value="Charon">Charon – ruhig, informativ (Butler-Empfehlung)</option>
+          <option value="Algenib">Algenib – tief, leicht rau</option>
+          <option value="Orus">Orus – fest, bestimmt</option>
+          <option value="Iapetus">Iapetus – klar, sachlich</option>
+          <option value="Sadaltager">Sadaltager – kundig, gelassen</option>
+          <option value="Rasalgethi">Rasalgethi – erklärend</option>
+          <option value="Alnilam">Alnilam – entschlossen</option>
+          <option value="Schedar">Schedar – ausgeglichen</option>
+          <option value="Umbriel">Umbriel – entspannt</option>
+          <option value="Fenrir">Fenrir – lebhaft</option>
+        </select>
+      </label>
+      <label data-engine="gemini">Sprechstil (Anweisung an die Stimme)
+        <textarea id="sVoiceStyle" rows="3"></textarea>
+      </label>
+
+      <label data-engine="eleven">ElevenLabs-API-Schlüssel (elevenlabs.io, Gratis-Kontingent)
+        <input id="sElevenKey" type="password" autocomplete="off">
+      </label>
+      <label data-engine="eleven">ElevenLabs-Stimme
+        <select id="sElevenVoice">
+          <option value="JBFqnCBsd6RMkjVDRZzb">George – britisch, warm, erzählend</option>
+          <option value="onwK4e9ZLuTAKqWW03F9">Daniel – britisch, souverän</option>
+          <option value="nPczCjzI2devNBz1zQrb">Brian – tief, ruhig</option>
+          <option value="pNInz6obpgDQGcFmaJgB">Adam – tief, kräftig</option>
+        </select>
+      </label>
+
+      <label data-engine="device">Gerätestimme<select id="sVoiceName"></select></label>
+      <label data-engine="device">Tonhöhe <span id="pitchVal"></span><input id="sPitch" type="range" min="0.5" max="1.5" step="0.05"></label>
+      <label data-engine="device">Tempo <span id="rateVal"></span><input id="sRate" type="range" min="0.7" max="1.4" step="0.05"></label>
+      <label class="row" data-engine="gemini eleven"><input id="sLongDevice" type="checkbox"> Lange Berichte mit Gerätestimme (spart Kontingent)</label>
       <button type="button" id="btnVoiceTest">▶ Probe hören</button>
+      <p class="hint">Antworten zu E-Mails liest Jarvis aus Datenschutzgründen immer mit der Gerätestimme vor.</p>
     </fieldset>
 
     <fieldset>
@@ -180,6 +220,6 @@
   </form>
 </dialog>
 
-<script src="app.js?v=9"></script>
+<script src="app.js?v=10"></script>
 </body>
 </html>
