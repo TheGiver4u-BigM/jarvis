@@ -1,0 +1,6 @@
+﻿Diese Dateien stammen aus Open-Source-Projekten und werden hier unverändert (bzw. gebündelt) ausgeliefert:
+
+- @mintplex-labs/piper-tts-web 1.0.5 (MIT-Lizenz) – Piper-Sprachausgabe im Browser
+- onnxruntime-web 1.18.0 (MIT-Lizenz, Microsoft) – KI-Laufzeit (ort-wasm-simd.wasm)
+- @diffusionstudio/piper-wasm 1.0.0 (MIT-Lizenz) – Phonemisierung (enthält espeak-ng-Daten, GPL-3.0)
+- Stimme "Thorsten" (de_DE-thorsten) von Thorsten Müller, Datensatz unter CC0 – wird zur Laufzeit von huggingface.co geladen
