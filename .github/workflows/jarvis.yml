@@ -1,0 +1,45 @@
+name: Jarvis Berichte
+
+on:
+  schedule:
+    # Zeiten sind UTC. Je zwei Einträge wegen Sommer-/Winterzeit; das Skript nimmt den passenden.
+    - cron: '0 5 * * *'    # 7 Uhr Sommerzeit
+    - cron: '0 6 * * *'    # 7 Uhr Winterzeit
+    - cron: '0 16 * * 0'   # Sonntag 18 Uhr Sommerzeit
+    - cron: '0 17 * * 0'   # Sonntag 18 Uhr Winterzeit
+  workflow_dispatch:       # Manuell starten zum Testen
+    inputs:
+      typ:
+        description: 'Welcher Bericht?'
+        type: choice
+        options: [briefing, woche]
+        default: briefing
+
+permissions:
+  contents: read
+
+jobs:
+  bericht:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-save --no-audit --no-fund web-push@3.6.7
+      - run: node briefing.mjs
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
+          TYP: ${{ inputs.typ }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          PUSH_SUBSCRIPTION: ${{ secrets.PUSH_SUBSCRIPTION }}
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          WATCHLIST: ${{ vars.WATCHLIST }}
