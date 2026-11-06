@@ -1,19 +1,30 @@
 // Service Worker: App-Oberfläche zwischenspeichern (nur als Notfall offline) + Push-Berichte empfangen.
-const CACHE = 'jarvis-v10';
-const SHELL = ['./', 'index.html', 'style.css?v=10', 'app.js?v=10', 'manifest.json', 'icon-192.png', 'icon-512.png'];
+const CACHE = 'jarvis-v11';
+const SHELL = ['./', 'index.html', 'style.css?v=11', 'app.js?v=11', 'manifest.json', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })))));
   self.skipWaiting();
 });
+const PIPER_CACHE = 'jarvis-piper-v1'; // große Stimm-Bausteine (~28 MB) – bleiben über Updates erhalten
 self.addEventListener('activate', (e) => {
   e.waitUntil(caches.keys().then((keys) => Promise.all(
-    keys.filter((k) => k !== CACHE && k !== 'jarvis-inbox').map((k) => caches.delete(k)))));
+    keys.filter((k) => k !== CACHE && k !== 'jarvis-inbox' && k !== PIPER_CACHE).map((k) => caches.delete(k)))));
   self.clients.claim();
 });
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (url.origin !== location.origin || e.request.method !== 'GET') return; // API-Aufrufe immer live
+  if (/\/piper\/.+\.(wasm|data)$/.test(url.pathname)) { // Stimm-Bausteine: einmal laden, dann aus dem Speicher
+    e.respondWith(caches.open(PIPER_CACHE).then(async (c) => {
+      const hit = await c.match(url.pathname);
+      if (hit) return hit;
+      const r = await fetch(e.request);
+      if (r.ok) c.put(url.pathname, r.clone());
+      return r;
+    }));
+    return;
+  }
   // Immer zuerst frisch vom Server holen (am Browser-Zwischenspeicher vorbei), nur offline aus dem Speicher
   e.respondWith(fetch(e.request, { cache: 'no-cache' }).then((r) => {
     const copy = r.clone();
