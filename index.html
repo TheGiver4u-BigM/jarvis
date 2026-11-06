@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://api.anthropic.com https://api.open-meteo.com https://geocoding-api.open-meteo.com https://api.bigdatacloud.net https://finnhub.io https://oauth2.googleapis.com https://gmail.googleapis.com; manifest-src 'self'; worker-src 'self'; base-uri 'none'; object-src 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#05080d">
+<title>J.A.R.V.I.S.</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="locked">
+
+<!-- ================= Sperrbildschirm ================= -->
+<div id="lock" class="lock">
+  <div class="lock-box">
+    <div class="lock-ring" aria-hidden="true"></div>
+    <div class="brand">J.A.R.V.I.S.</div>
+    <p id="lockMsg">PIN eingeben</p>
+    <form id="lockForm">
+      <input id="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN" aria-label="PIN">
+      <input id="pin2" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN wiederholen" aria-label="PIN wiederholen" hidden>
+      <button type="submit" id="lockBtn">Entsperren</button>
+    </form>
+    <button type="button" id="forgot" class="link">PIN vergessen? (setzt Jarvis zurück)</button>
+  </div>
+</div>
+
+<header class="topbar">
+  <div>
+    <div id="clock" class="clock">--:--</div>
+    <div id="date" class="date"></div>
+  </div>
+  <div class="brand">J.A.R.V.I.S.</div>
+  <div class="top-actions">
+    <button id="btnLock" class="icon-btn" aria-label="Sperren">🔒</button>
+    <button id="btnSettings" class="icon-btn" aria-label="Einstellungen">⚙</button>
+  </div>
+</header>
+
+<main>
+  <section class="reactor-wrap">
+    <button id="reactor" class="reactor idle" aria-label="Jarvis aktivieren">
+      <svg viewBox="0 0 200 200" aria-hidden="true">
+        <defs>
+          <radialGradient id="coreGrad">
+            <stop offset="0" stop-color="#ffffff"/>
+            <stop offset=".35" stop-color="#a6f4ff"/>
+            <stop offset=".75" stop-color="#1ec8ff" stop-opacity=".55"/>
+            <stop offset="1" stop-color="#00a2ff" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <circle class="r-outer" cx="100" cy="100" r="94"/>
+        <circle class="r-ticks" cx="100" cy="100" r="85"/>
+        <circle class="r-seg" cx="100" cy="100" r="68"/>
+        <circle class="r-inner" cx="100" cy="100" r="52"/>
+        <circle class="r-ring" cx="100" cy="100" r="40"/>
+        <circle class="r-core" cx="100" cy="100" r="36" fill="url(#coreGrad)"/>
+      </svg>
+    </button>
+    <div id="status" class="status">Tippe auf den Kreis und sprich</div>
+  </section>
+
+  <section class="quick">
+    <button data-q="briefing">☀ Tagesbriefing</button>
+    <button data-q="weekly">📈 Wochenbericht</button>
+    <button data-q="weatherHere">📍 Wetter hier</button>
+    <button data-q="mails">📧 Wichtige Mails</button>
+    <button data-q="tasks">✓ Aufgaben</button>
+    <button id="btnReport">📨 Letzter Bericht</button>
+  </section>
+
+  <form id="askForm" class="ask">
+    <input id="askInput" autocomplete="off" placeholder="Frag Jarvis etwas …">
+    <button type="submit" aria-label="Senden">➤</button>
+  </form>
+
+  <section id="log" class="log" aria-live="polite"></section>
+
+  <section class="cards">
+    <article class="card" id="weatherCard"><h2>Wetter</h2><div class="card-body">Lade …</div></article>
+    <article class="card" id="stocksCard"><h2>Watchlist</h2><div class="card-body">Lade …</div></article>
+    <article class="card" id="mailCard"><h2>Posteingang</h2><div class="card-body"></div></article>
+    <article class="card" id="tasksCard"><h2>Aufgaben</h2><div class="card-body"></div></article>
+  </section>
+</main>
+
+<dialog id="settings">
+  <form method="dialog" class="settings-form">
+    <h2>Einstellungen</h2>
+
+    <fieldset>
+      <legend>KI &amp; Börse</legend>
+      <label>Anthropic-API-Schlüssel<input id="sAnthropic" type="password" autocomplete="off" placeholder="sk-ant-…"></label>
+      <label>Finnhub-API-Schlüssel<input id="sFinnhub" type="password" autocomplete="off"></label>
+      <label>Watchlist (Kürzel, mit Komma)<input id="sWatch" placeholder="TTWO, NVDA, SPY"></label>
+      <label>KI-Modell<input id="sModel"></label>
+      <label class="row"><input id="sWeb" type="checkbox"> Websuche erlauben (breitere Infos)</label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Gmail (nur lesen)</legend>
+      <label>Google Client-ID<input id="sGClient" type="password" autocomplete="off"></label>
+      <label>Google Client-Secret<input id="sGSecret" type="password" autocomplete="off"></label>
+      <label>Refresh-Token<input id="sGRefresh" type="password" autocomplete="off"></label>
+      <button type="button" id="btnGTest">Verbindung testen</button>
+      <span id="gTestOut" class="hint"></span>
+    </fieldset>
+
+    <fieldset>
+      <legend>Stimme</legend>
+      <label class="row"><input id="sVoice" type="checkbox"> Antworten vorlesen</label>
+      <label>Stimme<select id="sVoiceName"></select></label>
+      <label>Tonhöhe <span id="pitchVal"></span><input id="sPitch" type="range" min="0.5" max="1.5" step="0.05"></label>
+      <label>Tempo <span id="rateVal"></span><input id="sRate" type="range" min="0.7" max="1.4" step="0.05"></label>
+      <button type="button" id="btnVoiceTest">▶ Probe hören</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Automatische Berichte (Push)</legend>
+      <p class="hint">Täglich ca. 7 Uhr Briefing, sonntags ca. 18 Uhr Wochenbericht, wichtige Mails sofort.</p>
+      <button type="button" id="btnPush">🔔 Push aktivieren</button>
+      <textarea id="sPush" readonly rows="3" placeholder="Hier erscheint dein Push-Code"></textarea>
+      <button type="button" id="btnCopyPush">Code kopieren</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Sicherheit</legend>
+      <label>Neue PIN (mind. 6 Ziffern)<input id="sNewPin" type="password" inputmode="numeric" autocomplete="off"></label>
+      <label>Neue PIN wiederholen<input id="sNewPin2" type="password" inputmode="numeric" autocomplete="off"></label>
+      <p class="hint">Alle Schlüssel und Aufgaben liegen verschlüsselt (AES-256) auf diesem Gerät. Jarvis sperrt sich nach 5 Minuten im Hintergrund.</p>
+    </fieldset>
+
+    <div class="actions">
+      <button value="cancel">Abbrechen</button>
+      <button value="save" class="primary">Speichern</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
