@@ -8,6 +8,96 @@ const store = {
   del(k) { try { localStorage.removeItem('jarvis.' + k); } catch { /* ignorieren */ } },
 };
 
+/* ======================= Farbschema (nicht geheim → unverschlüsselt, damit auch der Sperrbildschirm passt) ======================= */
+const PRESETS = [
+  ['Orange', '#ff6a1a'], ['Rot', '#ff2d3d'], ['Gold', '#ffc23a'], ['Grün', '#2bff88'], ['Türkis', '#22e6d0'],
+  ['Cyan', '#2fd8ff'], ['Blau', '#2f6dff'], ['Lila', '#9b5cff'], ['Pink', '#ff3fb4'], ['Weiß', '#e8eef5'],
+];
+const theme = Object.assign({ accent: '#ff6a1a', density: 1800 }, store_get('theme'));
+function store_get(k) { try { return JSON.parse(localStorage.getItem('jarvis.' + k)) || {}; } catch { return {}; } }
+const hexToRgb = (h) => { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+function applyTheme() {
+  const rgb = hexToRgb(theme.accent).join(', ');
+  document.documentElement.style.setProperty('--accent', theme.accent);
+  document.documentElement.style.setProperty('--accent-rgb', rgb);
+  orb.setColor(rgb);
+  orb.setDensity(theme.density);
+}
+function saveTheme() { store.set('theme', theme); applyTheme(); }
+
+/* ======================= Partikelkern (3D-Punktwolke auf Canvas) ======================= */
+const orb = (() => {
+  const cv = document.getElementById('orb');
+  const ctx = cv.getContext('2d');
+  let pts = [], color = '255, 106, 26', running = false;
+  let rot = 0, t = 0, energy = 0.15, pulse = 0;
+
+  function build(n) {
+    pts = [];
+    for (let i = 0; i < n; i++) {
+      const surface = i % 3 !== 0;                       // 2/3 Hülle, 1/3 Inneres → dichter "Gehirn"-Look
+      const y = 1 - (i / (n - 1)) * 2, ring = Math.sqrt(1 - y * y), th = i * 2.399963;
+      const r = surface ? 1 : Math.cbrt(Math.random()) * 0.92;
+      pts.push({ x: Math.cos(th) * ring * r, y: y * r, z: Math.sin(th) * ring * r, ph: Math.random() * 6.283, s: 0.5 + Math.random(), surface });
+    }
+  }
+  function resize() {
+    const d = Math.min(window.devicePixelRatio || 1, 2);
+    const w = cv.clientWidth || 300;
+    cv.width = Math.round(w * d); cv.height = Math.round(w * d);
+  }
+  function frame() {
+    if (!running) return;
+    requestAnimationFrame(frame);
+    if (document.hidden || !cv.clientWidth) return;
+    if (cv.width !== Math.round(cv.clientWidth * Math.min(window.devicePixelRatio || 1, 2))) resize();
+    const st = document.getElementById('reactor').className;
+    const target = st.includes('listening') ? 1 : st.includes('thinking') ? 0.75 : st.includes('speaking') ? 0.5 : 0.12;
+    energy += (target - energy) * 0.04;
+    pulse *= 0.88;
+    t += 0.016;
+    rot += 0.0025 + energy * 0.018;
+
+    const W = cv.width, c = W / 2;
+    const R = W * 0.33 * (1 + energy * 0.06 + pulse * 0.1 + Math.sin(t * 1.2) * 0.012);
+    ctx.clearRect(0, 0, W, W);
+
+    const glow = ctx.createRadialGradient(c, c, 0, c, c, R * 1.55);
+    glow.addColorStop(0, `rgba(${color}, ${0.22 + energy * 0.25 + pulse * 0.2})`);
+    glow.addColorStop(0.5, `rgba(${color}, ${0.06 + energy * 0.06})`);
+    glow.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = glow; ctx.fillRect(0, 0, W, W);
+
+    ctx.globalCompositeOperation = 'lighter';
+    const cr = Math.cos(rot), sr = Math.sin(rot), tilt = 0.4 + Math.sin(t * 0.3) * 0.1, ct = Math.cos(tilt), stl = Math.sin(tilt);
+    const turb = 0.05 + energy * 0.12 + pulse * 0.15, unit = W / 420;
+    for (const p of pts) {
+      const wob = 1 + Math.sin(t * 1.6 + p.ph + p.y * 5) * turb * (p.surface ? 1 : 0.6);
+      const x = p.x * wob, y = p.y * wob, z = p.z * wob;
+      const x1 = x * cr - z * sr, z1 = x * sr + z * cr;
+      const y1 = y * ct - z1 * stl, z2 = y * stl + z1 * ct;
+      const persp = 1 + z2 * 0.28, depth = (z2 + 1) / 2;
+      const a = (p.surface ? 0.18 : 0.1) + depth * (p.surface ? 0.8 : 0.5);
+      const sz = (0.7 + depth * 1.7) * p.s * unit;
+      ctx.fillStyle = `rgba(${color}, ${a})`;
+      ctx.fillRect(c + x1 * R * persp - sz / 2, c + y1 * R * persp - sz / 2, sz, sz);
+    }
+    // heller Kern
+    const core = ctx.createRadialGradient(c, c, 0, c, c, R * 0.35);
+    core.addColorStop(0, `rgba(255,255,255, ${0.25 + energy * 0.35 + pulse * 0.3})`);
+    core.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = core; ctx.fillRect(0, 0, W, W);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  return {
+    start() { if (running) return; running = true; resize(); frame(); },
+    setColor(rgb) { color = rgb; },
+    setDensity(n) { build(Math.max(300, Math.min(3000, Number(n) || 1400))); },
+    beat() { pulse = 1; },
+  };
+})();
+applyTheme();
+
 const HOME = { name: 'Lügde (32676)', lat: 51.9577, lon: 9.2487 };
 const settings = {
   anthropicKey: '', finnhubKey: '', model: 'claude-sonnet-5-5', watchlist: ['TTWO', 'NVDA'], webSearch: true,
@@ -123,10 +213,46 @@ function tick() {
 }
 function setState(state, text) {
   $('#reactor').className = 'reactor ' + state;
+  $('#sysState').textContent = { idle: 'ONLINE', listening: 'HÖRT ZU', thinking: 'ANALYSIERT', speaking: 'SPRICHT' }[state];
   $('#status').textContent = text ?? {
-    idle: 'Tippe auf den Kreis und sprich', listening: 'Ich höre zu …',
+    idle: 'Tippe auf den Kern und sprich', listening: 'Ich höre zu …',
     thinking: 'Einen Moment …', speaking: 'Tippen zum Stoppen',
   }[state];
+}
+function renderChips() {
+  const items = [
+    ['KI', !!settings.anthropicKey], ['BÖRSE', !!settings.finnhubKey], ['GMAIL', !!gmailReady()],
+    ['PUSH', 'Notification' in window && Notification.permission === 'granted'], ['TRESOR', !!vaultKey],
+  ];
+  $('#chips').innerHTML = items.map(([n, on]) => `<span class="chip ${on ? 'on' : 'off'}">${n}</span>`).join('');
+}
+
+/* ======================= HUD-Elemente ======================= */
+function gauge(value, max, label, unit) {
+  const v = Number(value) || 0, p = Math.max(0, Math.min(1, v / max)), C = 2 * Math.PI * 26;
+  return `<div class="gauge"><div class="gauge-ring"><svg viewBox="0 0 64 64" aria-hidden="true"><circle class="g-bg" cx="32" cy="32" r="26"/>`
+    + `<circle class="g-val" cx="32" cy="32" r="26" stroke-dasharray="${(C * p).toFixed(1)} ${C.toFixed(1)}"/></svg>`
+    + `<div class="g-num">${Math.round(v)}<small>${unit}</small></div></div><div class="g-lbl">${label}</div></div>`;
+}
+function lineChart(cv, values, bars) {
+  const d = Math.min(window.devicePixelRatio || 1, 2), w = cv.clientWidth, h = cv.clientHeight;
+  if (!w || !values.length) return;
+  cv.width = w * d; cv.height = h * d;
+  const ctx = cv.getContext('2d');
+  ctx.scale(d, d);
+  const acc = getComputedStyle(document.documentElement).getPropertyValue('--accent-rgb').trim();
+  if (bars) { // Regenwahrscheinlichkeit als Balken im Hintergrund
+    const bw = w / bars.length;
+    bars.forEach((b, i) => { ctx.fillStyle = `rgba(${acc}, ${0.08 + b / 400})`; const bh = (b / 100) * h; ctx.fillRect(i * bw + 1, h - bh, bw - 2, bh); });
+  }
+  const min = Math.min(...values), max = Math.max(...values), span = max - min || 1;
+  const xy = (v, i) => [i / (values.length - 1) * w, h - 6 - ((v - min) / span) * (h - 14)];
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, `rgba(${acc}, .35)`); grad.addColorStop(1, `rgba(${acc}, 0)`);
+  ctx.beginPath(); values.forEach((v, i) => { const [x, y] = xy(v, i); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath(); ctx.fillStyle = grad; ctx.fill();
+  ctx.beginPath(); values.forEach((v, i) => { const [x, y] = xy(v, i); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  ctx.strokeStyle = `rgba(${acc}, .95)`; ctx.lineWidth = 1.6; ctx.shadowColor = `rgba(${acc}, .8)`; ctx.shadowBlur = 6; ctx.stroke();
 }
 
 /* ======================= Wetter (Open-Meteo) ======================= */
@@ -168,7 +294,7 @@ async function resolvePlace(place) {
   return geocode(place);
 }
 async function getWeather(place) {
-  const loc = await resolvePlace(place);
+  const loc = (place && typeof place === 'object') ? place : await resolvePlace(place);
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${loc.lat.toFixed(3)}&longitude=${loc.lon.toFixed(3)}`
     + '&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,cloud_cover,wind_speed_10m,wind_direction_10m,wind_gusts_10m,uv_index'
     + '&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,sunshine_duration,precipitation_sum,precipitation_probability_max,wind_speed_10m_max,wind_gusts_10m_max,uv_index_max'
@@ -191,21 +317,34 @@ async function getWeather(place) {
     })),
   };
 }
+async function getHourly(loc) {
+  const j = await (await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${loc.lat.toFixed(3)}&longitude=${loc.lon.toFixed(3)}&hourly=temperature_2m,precipitation_probability&forecast_hours=24&timezone=auto`)).json();
+  return { temp: j.hourly.temperature_2m, rain: j.hourly.precipitation_probability, time: j.hourly.time };
+}
 async function renderWeather(place) {
   const body = $('#weatherCard .card-body');
   try {
-    const w = await getWeather(place);
+    const loc = await resolvePlace(place);
+    const [w, hr] = await Promise.all([getWeather(loc), getHourly(loc)]);
     const n = w.jetzt, t = w.tage[0];
     body.innerHTML = `
-      <div class="muted">📍 ${esc(w.ort)}</div>
-      <div class="big">${Math.round(n.temperatur_c)}°</div>
-      <div>${esc(n.zustand)} · gefühlt ${Math.round(n.gefuehlt_c)}°</div>
+      <div class="wx-head">
+        <div><div class="muted">📍 ${esc(w.ort)}</div><div class="big">${Math.round(n.temperatur_c)}°</div></div>
+        <div class="muted">${esc(n.zustand)}<br>gefühlt ${Math.round(n.gefuehlt_c)}°<br>${Math.round(t.min_c)}° / ${Math.round(t.max_c)}°</div>
+      </div>
+      <div class="gauges">
+        ${gauge(t.regenrisiko_pct, 100, 'Regen', '%')}
+        ${gauge(n.wind_kmh, 80, 'Wind ' + n.windrichtung, 'km/h')}
+        ${gauge(t.sonnenstunden, 12, 'Sonne', 'h')}
+        ${gauge(t.uv_max, 11, 'UV', '')}
+      </div>
+      <canvas class="chart" aria-label="Temperaturverlauf 24 Stunden"></canvas>
+      <div class="chart-lbl"><span>JETZT</span><span>24 H · TEMPERATUR / REGEN</span><span>+24H</span></div>
       <div class="grid2 muted">
-        <span>💨 ${Math.round(n.wind_kmh)} km/h ${n.windrichtung}</span><span>Böen ${Math.round(n.boeen_kmh)} km/h</span>
-        <span>🌧 ${t.regenrisiko_pct}% · ${t.regen_mm} mm</span><span>☀ ${t.sonnenstunden} h Sonne</span>
-        <span>↑ ${t.sonnenaufgang} ↓ ${t.sonnenuntergang}</span><span>UV max ${t.uv_max}</span>
-        <span>Heute ${Math.round(t.min_c)}° / ${Math.round(t.max_c)}°</span><span>Morgen ${Math.round(w.tage[1].min_c)}° / ${Math.round(w.tage[1].max_c)}°</span>
+        <span>Böen ${Math.round(n.boeen_kmh)} km/h</span><span>Regen ${t.regen_mm} mm</span>
+        <span>↑ ${t.sonnenaufgang} ↓ ${t.sonnenuntergang}</span><span>Morgen ${Math.round(w.tage[1].min_c)}° / ${Math.round(w.tage[1].max_c)}°</span>
       </div>`;
+    lineChart(body.querySelector('.chart'), hr.temp, hr.rain);
   } catch (e) { body.textContent = 'Wetter nicht verfügbar: ' + e.message; }
 }
 
@@ -238,7 +377,15 @@ async function renderStocks() {
     const qs = await getQuotes(settings.watchlist);
     body.innerHTML = qs.map((q) => {
       const cls = q.prozent >= 0 ? 'up' : 'down';
-      return `<div class="stock"><b>${esc(q.symbol)}</b><span>${q.kurs_usd?.toFixed(2)} $ <span class="${cls}">${q.prozent >= 0 ? '+' : ''}${q.prozent?.toFixed(2)}%</span></span></div>`;
+      // Tagesspanne: Tief → Hoch, Markierung = aktueller Kurs
+      const lo = Math.min(q.tagestief, q.vortag), hi = Math.max(q.tageshoch, q.vortag), span = hi - lo || 1;
+      const pos = Math.max(0, Math.min(100, ((q.kurs_usd - lo) / span) * 100));
+      const prev = Math.max(0, Math.min(100, ((q.vortag - lo) / span) * 100));
+      return `<div class="stock"><div class="stock-top"><b>${esc(q.symbol)}</b><span>${q.kurs_usd?.toFixed(2)} $ <span class="${cls}">${q.prozent >= 0 ? '+' : ''}${q.prozent?.toFixed(2)}%</span></span></div>`
+        + `<svg class="range" viewBox="0 0 100 6" preserveAspectRatio="none" aria-hidden="true"><rect class="r-bg" width="100" height="6"/>`
+        + `<rect class="r-fill" x="${Math.min(prev, pos).toFixed(1)}" width="${Math.abs(pos - prev).toFixed(1)}" height="6"/>`
+        + `<rect class="r-mark" x="${(pos - 0.8).toFixed(1)}" width="1.6" height="6"/></svg>`
+        + `<div class="chart-lbl"><span>T ${q.tagestief?.toFixed(2)}</span><span>H ${q.tageshoch?.toFixed(2)}</span></div></div>`;
     }).join('') + '<div class="muted mt">Kurse in USD, leicht verzögert</div>';
   } catch (e) { body.textContent = e.message; }
 }
@@ -292,7 +439,7 @@ async function renderMail() {
   if (!gmailReady()) { body.innerHTML = '<span class="muted">Gmail noch nicht verbunden (⚙ → Gmail).</span>'; return; }
   try {
     const ms = await searchMails(undefined, 6);
-    body.innerHTML = ms.length ? ms.map((m) => `<div class="stock"><span>${m.wichtig_markiert ? '❗ ' : ''}<b>${esc(m.von.replace(/<.*>/, '').trim())}</b><br><span class="muted">${esc(m.betreff)}</span></span></div>`).join('')
+    body.innerHTML = ms.length ? ms.map((m) => `<div class="mail"><span>${m.wichtig_markiert ? '❗ ' : ''}<b>${esc(m.von.replace(/<.*>/, '').trim())}</b><br><span class="muted">${esc(m.betreff)}</span></span></div>`).join('')
       : '<span class="muted">Keine ungelesenen Mails.</span>';
   } catch (e) { body.textContent = e.message; }
 }
@@ -451,6 +598,7 @@ function speak(text, onEnd) {
   const u = new SpeechSynthesisUtterance(plain);
   u.lang = 'de-DE'; u.voice = pickVoice(); u.pitch = Number(settings.pitch); u.rate = Number(settings.rate);
   u.onstart = () => setState('speaking');
+  u.onboundary = () => orb.beat(); // Kern pulsiert bei jedem Wort
   u.onend = u.onerror = () => { setState('idle'); onEnd?.(); };
   speechSynthesis.cancel(); speechSynthesis.speak(u);
 }
@@ -509,6 +657,24 @@ const QUICK = {
 document.querySelectorAll('[data-q]').forEach((b) => b.addEventListener('click', () => ask(QUICK[b.dataset.q])));
 $('#askForm').addEventListener('submit', (e) => { e.preventDefault(); const v = $('#askInput').value; $('#askInput').value = ''; ask(v); });
 
+/* ======================= Farbmenü (wirkt sofort) ======================= */
+function renderSwatches() {
+  $('#swatches').innerHTML = PRESETS.map(([name, hex]) =>
+    `<button type="button" class="swatch${hex === theme.accent ? ' active' : ''}" data-hex="${hex}" title="${name}" aria-label="${name}">${name}</button>`).join('');
+  // Farbe der Knöpfe per CSSOM setzen (erlaubt durch die Sicherheitsregeln, anders als style-Attribute)
+  document.querySelectorAll('.swatch').forEach((b) => { b.style.background = b.dataset.hex; b.style.color = '#000'; });
+  $('#sAccent').value = theme.accent;
+  $('#sDensity').value = theme.density;
+}
+function setAccent(hex) {
+  theme.accent = hex; saveTheme(); renderSwatches();
+  renderWeather(); renderStocks(); // Diagramme in neuer Farbe zeichnen
+}
+$('#swatches').addEventListener('click', (e) => { const hex = e.target.dataset?.hex; if (hex) setAccent(hex); });
+$('#sAccent').addEventListener('input', (e) => { theme.accent = e.target.value; applyTheme(); });
+$('#sAccent').addEventListener('change', (e) => setAccent(e.target.value));
+$('#sDensity').addEventListener('change', (e) => { theme.density = Number(e.target.value); saveTheme(); });
+
 /* ======================= Einstellungen ======================= */
 const FIELDS = { sAnthropic: 'anthropicKey', sFinnhub: 'finnhubKey', sModel: 'model', sGClient: 'googleClientId', sGSecret: 'googleSecret', sGRefresh: 'googleRefresh', sPitch: 'pitch', sRate: 'rate' };
 $('#btnSettings').addEventListener('click', () => {
@@ -518,6 +684,7 @@ $('#btnSettings').addEventListener('click', () => {
   $('#pitchVal').textContent = settings.pitch; $('#rateVal').textContent = settings.rate;
   $('#sNewPin').value = $('#sNewPin2').value = ''; $('#gTestOut').textContent = '';
   fillVoiceList();
+  renderSwatches();
   $('#settings').showModal();
 });
 $('#settings').addEventListener('close', async () => {
@@ -534,7 +701,7 @@ $('#settings').addEventListener('close', async () => {
     else addMsg('jarvis error', 'PIN nicht geändert: Die PINs stimmen nicht überein oder haben nicht 6–12 Ziffern.');
   }
   await saveVault();
-  renderStocks(); renderMail();
+  renderStocks(); renderMail(); renderChips();
   if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
 });
 $('#btnGTest').addEventListener('click', async () => {
@@ -583,6 +750,7 @@ navigator.serviceWorker?.addEventListener('message', (e) => { if (e.data === 'be
 
 /* ======================= Start (erst nach dem Entsperren) ======================= */
 function start() {
+  orb.start(); renderChips();
   tick(); setInterval(tick, 10000);
   renderTasks(); renderWeather(); renderStocks(); renderMail();
   setInterval(renderStocks, 5 * 60000);
