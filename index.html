@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://api.anthropic.com https://api.open-meteo.com https://geocoding-api.open-meteo.com https://api.bigdatacloud.net https://finnhub.io https://oauth2.googleapis.com https://gmail.googleapis.com; manifest-src 'self'; worker-src 'self'; base-uri 'none'; object-src 'none'">
 <meta name="referrer" content="no-referrer">
-<meta name="theme-color" content="#05080d">
+<meta name="theme-color" content="#030405">
 <title>J.A.R.V.I.S.</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
@@ -18,7 +18,7 @@
 <div id="lock" class="lock">
   <div class="lock-box">
     <div class="lock-ring" aria-hidden="true"></div>
-    <div class="brand">J.A.R.V.I.S.</div>
+    <div class="brand">JARVIS <span class="sep">//</span> GESPERRT</div>
     <p id="lockMsg">PIN eingeben</p>
     <form id="lockForm">
       <input id="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN" aria-label="PIN">
@@ -29,68 +29,89 @@
   </div>
 </div>
 
+<!-- ================= HUD-Kopfzeile ================= -->
 <header class="topbar">
-  <div>
-    <div id="clock" class="clock">--:--</div>
-    <div id="date" class="date"></div>
+  <div class="hud-title">
+    <div class="brand">JARVIS <span class="sep">//</span> <b id="sysState">ONLINE</b></div>
+    <div id="chips" class="chips"></div>
   </div>
-  <div class="brand">J.A.R.V.I.S.</div>
-  <div class="top-actions">
+  <div class="top-right">
+    <div class="time-box">
+      <div id="clock" class="clock">--:--</div>
+      <div id="date" class="date"></div>
+    </div>
     <button id="btnLock" class="icon-btn" aria-label="Sperren">🔒</button>
     <button id="btnSettings" class="icon-btn" aria-label="Einstellungen">⚙</button>
   </div>
 </header>
 
-<main>
-  <section class="reactor-wrap">
-    <button id="reactor" class="reactor idle" aria-label="Jarvis aktivieren">
-      <svg viewBox="0 0 200 200" aria-hidden="true">
-        <defs>
-          <radialGradient id="coreGrad">
-            <stop offset="0" stop-color="#ffffff"/>
-            <stop offset=".35" stop-color="#a6f4ff"/>
-            <stop offset=".75" stop-color="#1ec8ff" stop-opacity=".55"/>
-            <stop offset="1" stop-color="#00a2ff" stop-opacity="0"/>
-          </radialGradient>
-        </defs>
-        <circle class="r-outer" cx="100" cy="100" r="94"/>
-        <circle class="r-ticks" cx="100" cy="100" r="85"/>
-        <circle class="r-seg" cx="100" cy="100" r="68"/>
-        <circle class="r-inner" cx="100" cy="100" r="52"/>
-        <circle class="r-ring" cx="100" cy="100" r="40"/>
-        <circle class="r-core" cx="100" cy="100" r="36" fill="url(#coreGrad)"/>
-      </svg>
-    </button>
-    <div id="status" class="status">Tippe auf den Kreis und sprich</div>
+<main class="hud">
+  <!-- Mitte: Partikelkern + Bedienung -->
+  <section class="center">
+    <div class="reactor-wrap">
+      <button id="reactor" class="reactor idle" aria-label="Jarvis aktivieren">
+        <canvas id="orb" aria-hidden="true"></canvas>
+      </button>
+      <div id="status" class="status">Tippe auf den Kern und sprich</div>
+    </div>
+
+    <div class="quick">
+      <button data-q="briefing">☀ Briefing</button>
+      <button data-q="weekly">📈 Wochenbericht</button>
+      <button data-q="weatherHere">📍 Wetter hier</button>
+      <button data-q="mails">📧 Wichtige Mails</button>
+      <button data-q="tasks">✓ Aufgaben</button>
+      <button id="btnReport">📨 Letzter Bericht</button>
+    </div>
+
+    <form id="askForm" class="ask">
+      <span class="prompt">&gt;</span>
+      <input id="askInput" autocomplete="off" placeholder="Befehl an Jarvis …">
+      <button type="submit" aria-label="Senden">SENDEN</button>
+    </form>
+
+    <div id="log" class="log" aria-live="polite"></div>
   </section>
 
-  <section class="quick">
-    <button data-q="briefing">☀ Tagesbriefing</button>
-    <button data-q="weekly">📈 Wochenbericht</button>
-    <button data-q="weatherHere">📍 Wetter hier</button>
-    <button data-q="mails">📧 Wichtige Mails</button>
-    <button data-q="tasks">✓ Aufgaben</button>
-    <button id="btnReport">📨 Letzter Bericht</button>
+  <!-- Links -->
+  <section class="side left">
+    <article class="panel" id="weatherCard">
+      <h2><span>Umgebung</span><i>WETTER</i></h2>
+      <div class="card-body">Lade …</div>
+    </article>
+    <article class="panel" id="mailCard">
+      <h2><span>Kommunikation</span><i>GMAIL</i></h2>
+      <div class="card-body"></div>
+    </article>
   </section>
 
-  <form id="askForm" class="ask">
-    <input id="askInput" autocomplete="off" placeholder="Frag Jarvis etwas …">
-    <button type="submit" aria-label="Senden">➤</button>
-  </form>
-
-  <section id="log" class="log" aria-live="polite"></section>
-
-  <section class="cards">
-    <article class="card" id="weatherCard"><h2>Wetter</h2><div class="card-body">Lade …</div></article>
-    <article class="card" id="stocksCard"><h2>Watchlist</h2><div class="card-body">Lade …</div></article>
-    <article class="card" id="mailCard"><h2>Posteingang</h2><div class="card-body"></div></article>
-    <article class="card" id="tasksCard"><h2>Aufgaben</h2><div class="card-body"></div></article>
+  <!-- Rechts -->
+  <section class="side right">
+    <article class="panel" id="stocksCard">
+      <h2><span>Märkte</span><i>WATCHLIST</i></h2>
+      <div class="card-body">Lade …</div>
+    </article>
+    <article class="panel" id="tasksCard">
+      <h2><span>Protokoll</span><i>AUFGABEN</i></h2>
+      <div class="card-body"></div>
+    </article>
   </section>
 </main>
 
 <dialog id="settings">
   <form method="dialog" class="settings-form">
     <h2>Einstellungen</h2>
+
+    <fieldset>
+      <legend>Design &amp; Farbe</legend>
+      <div id="swatches" class="swatches"></div>
+      <label class="row color-row">Eigene Farbe (ganzes Farbspektrum)
+        <input id="sAccent" type="color" value="#ff6a1a">
+      </label>
+      <label>Partikel-Dichte
+        <input id="sDensity" type="range" min="400" max="2400" step="100">
+      </label>
+    </fieldset>
 
     <fieldset>
       <legend>KI &amp; Börse</legend>
