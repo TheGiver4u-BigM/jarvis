@@ -10,7 +10,8 @@
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
-<link rel="stylesheet" href="style.css">
+<meta name="jarvis-version" content="8">
+<link rel="stylesheet" href="style.css?v=8">
 </head>
 <body class="locked">
 
@@ -171,6 +172,7 @@
       <p class="hint">Alle Schlüssel und Aufgaben liegen verschlüsselt (AES-256) auf diesem Gerät. Jarvis sperrt sich nach 5 Minuten im Hintergrund.</p>
     </fieldset>
 
+    <p id="appVersion" class="hint"></p>
     <div class="actions">
       <button value="cancel">Abbrechen</button>
       <button value="save" class="primary">Speichern</button>
@@ -178,6 +180,6 @@
   </form>
 </dialog>
 
-<script src="app.js"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>
